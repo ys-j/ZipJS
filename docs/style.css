@@ -1,0 +1,32 @@
+th, td {
+	padding: 4px 8px;
+}
+th {
+	background-color: lightgray;
+}
+td {
+	tr:not(:first-of-type) & {
+		border-top: 1px solid gray;
+	}
+	&.r {
+		text-align: right;
+	}
+	&.c {
+		text-align: center;
+	}
+	a:not(:hover) {
+		text-decoration: none;
+	}
+}
+[data-suffix]::after {
+	content: attr(data-suffix);
+	padding-inline-start: 4px;
+}
+button {
+	&.rename::before {
+		content: '名前の変更';
+	}
+	&.delete::before {
+		content: '削除';
+	}
+}

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang=ja-JP>
+<title>Zip Maker</title>
+<link rel=stylesheet href=style.css>
+<main>
+	<form name=f>
+		<input name=file type=file accept=*>
+		<input type=submit value=追加>
+		<input name=download type=button value=ダウンロード>
+	</form>
+	<table>
+		<thead>
+			<tr><th>操作<th>ファイル名<th>圧縮前サイズ<th>圧縮後サイズ<th>更新日時<th>圧縮方式<th>バージョン<th>CRC
+		<tbody id=tbody>
+	</table>
+</main>
+<script type=module src=make.js></script>
