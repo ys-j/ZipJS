@@ -61,13 +61,21 @@ async function onSubmit(e) {
 	const file = /** @type {HTMLInputElement} */ ($form.file)?.files?.[0];
 	if (!file) return;
 
+	let zip;
 	document.body.style.cursor = 'wait';
-	const zip = new ZipFile.Extractor(await file.arrayBuffer());
-	document.body.style.cursor = 'auto';
+	try {
+		zip = new ZipFile.Extractor(await file.arrayBuffer());
+	} catch (e) {
+		console.error(e);
+		alert(e);
+		return;
+	} finally {
+		document.body.style.cursor = 'auto';
+	}
 
 	if (!$tbody) return;
 	$tbody.innerHTML = '';
-	
+
 	for (const content of zip) {
 		const cd = content.entry;
 		let fileName;

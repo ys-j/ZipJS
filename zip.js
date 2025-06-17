@@ -47,6 +47,7 @@ export class Extractor {
 	constructor(buffer) {
 		const bytes = new U(buffer);
 		const eocdOffset = bytes.findLastIndex((_, i, a) => [0x50, 0x4b, 5, 6].every((v, j) => v === a[i + j]));
+		if (eocdOffset < 0) throw new Error('Invalid format: End of central directory record is not found.');
 		this.eocd = EndOfCentralDirectoryRecord.from(new V(buffer, eocdOffset));
 		let cdOffset = this.eocd.cdOffset;
 		this.cd = Array.from({ length: this.eocd.numOfFiles }, () => {
