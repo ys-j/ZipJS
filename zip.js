@@ -2,94 +2,42 @@
  * Zip/Unzip Module
  */
 
-export const acceptMime = [
-	'application/zip', // zip
-	'application/x-zip-compressed', // zip
-	// Office Open XML
-	'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-	'application/vnd.openxmlformats-officedocument.presentationml.presentation', // pptx
-	// OpenDocument Format
-	'application/vnd.oasis.opendocument.text', // odt
-	'application/vnd.oasis.opendocument.spreadsheet', // ods
-	'application/vnd.oasis.opendocument.presentation', // odp
-	'application/vnd.oasis.opendocument.graphics', // odg
-	// Others
-	'application/epub+zip', // epub
-];
+// For minify
+const U = Uint8Array, V = DataView;
 
-export const compressionMethods = {
-	0: 'Store',
-	1: 'Shrunk',
-	2: 'Reduce 1',
-	3: 'Reduce 2',
-	4: 'Reduce 3',
-	5: 'Reduce 4',
-	6: 'Implode',
-	7: 'Tokenize',
-	8: 'Deflate',
-	9: 'Deflate64',
-	10: 'TERSE (old)',
-	12: 'BZIP2',
-	14: 'LZMA',
-	16: 'z/OS CMPSC',
-	18: 'TERSE (new)',
-	19: 'LZ77 z',
-	93: 'Zstandard',
-	94: 'MP3',
-	95: 'XZ',
-	96: 'JPEG',
-	97: 'WavPack',
-	98: 'PPMd ver.I rev.1',
-	99: 'AE-x encryption',
+const crc32table = Uint32Array.from({ length: 256 }, (_, i) => {
+	let c = i, j = 8
+	while (j--) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : (c >>> 1);
+	return c;
+});
+
+/**
+ * Calculate CRC-32 from a byte array.
+ * @param {Uint8Array<ArrayBuffer>} bytes Byte array
+ * @returns {number} CRC-32
+ */
+export const calcCrc32 = bytes => {
+	let c = 0xffffffff;
+	for (const b of bytes) c = crc32table[(c ^ b) & 0xff] ^ (c >>> 8);
+	return c ^ 0xffffffff;
 };
 
 /**
- * Class for CRC-32
+ * Formats CRC-32 (int32) to hex string.
+ * @param {number} int32 CRC-32
+ * @returns {string} Hex string
  */
-class Crc32 {
-	#table = new Uint32Array(256);
-	constructor() {
-		for (let i = 0; i < 256; i++) {
-			let c = i;
-			for (let j = 0; j < 8; j++) {
-				const mc = c >>> 1;
-				c = c & 1 ? 0xedb88320 ^ mc : mc;
-			}
-			this.#table[i] = c;
-		}
-	}
-	/**
-	 * Calculate CRC-32 from a byte array.
-	 * @param {Uint8Array<ArrayBuffer>} bytes Byte array
-	 * @returns {number} CRC-32
-	 */
-	calc(bytes) {
-		let c = 0xffffffff;
-		for (const b of bytes) {
-			c = this.#table[(c ^ b) & 0xff] ^ (c >>> 8);
-		}
-		return c ^ 0xffffffff;
-	}
-	/**
-	 * Formats CRC-32 (int32) to hex string.
-	 * @param {number} int32 CRC-32
-	 * @returns {string} Hex string
-	 */
-	static fmt(int32) {
-		const octets = [24, 16, 8, 0].map(shift => int32 >>> shift & 0xff);
-		return octets.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-	}
-}
-
-export const fmtCrc32 = Crc32.fmt;
+export const fmtCrc32 = int32 => {
+	const octets = [24, 16, 8, 0].map(shift => int32 >>> shift & 0xff);
+	return octets.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+};
 
 /**
  * Class for unzipping file
  */
 export class Extractor {
 	/** @type {EndOfCentralDirectoryRecord} */ eocd;
-	/** @type {Array<CentralDirectoryEntry>} */ centralDirectory;
+	/** @type {CentralDirectoryEntry[]} */ cd;
 	/** @type {Array<{ header: LocalFileHeader, body: Uint8Array<ArrayBuffer> }> } */ contents;
 
 	/**
@@ -97,23 +45,27 @@ export class Extractor {
 	 * @param {ArrayBuffer} buffer array buffer
 	 */
 	constructor(buffer) {
-		const bytes = new Uint8Array(buffer);
-		const cursor = new ByteArrayCursor(bytes);
-		const offsetEocd = bytes.findLastIndex((_, i, a) => [0x50, 0x4b, 5, 6].every((v, j) => v === a[i + j]));
-		cursor.moveTo(offsetEocd);
-		this.eocd = EndOfCentralDirectoryRecord.from(cursor);
-		cursor.moveTo(this.eocd.cdOffset);
-		this.centralDirectory = Array.from({ length: this.eocd.numOfFiles }, () => CentralDirectoryEntry.from(cursor));
-		this.contents = this.centralDirectory.map(record => {
-			cursor.moveTo(record.headerOffset);
-			const header = LocalFileHeader.from(cursor);
-			const body = cursor.subarray(record.compressedSize);
+		const bytes = new U(buffer);
+		const eocdOffset = bytes.findLastIndex((_, i, a) => [0x50, 0x4b, 5, 6].every((v, j) => v === a[i + j]));
+		this.eocd = EndOfCentralDirectoryRecord.from(new V(buffer, eocdOffset));
+		let cdOffset = this.eocd.cdOffset;
+		this.cd = Array.from({ length: this.eocd.numOfFiles }, () => {
+			const view = new V(buffer, cdOffset, eocdOffset - cdOffset);
+			const entry = CentralDirectoryEntry.from(view);
+			cdOffset += entry.length;
+			return entry;
+		});
+		this.contents = this.cd.map(record => {
+			const view = new V(buffer, record.headerOffset);
+			const header = LocalFileHeader.from(view);
+			let offset = header.length;
 			if (header.hasDataDescriptor) {
-				const maySignature = cursor.readAsInt();
-				header.crc32 = maySignature === 0x08074b50 ? cursor.readAsInt() : maySignature;
-				header.compressedSize = cursor.readAsInt();
-				header.uncompressedSize = cursor.readAsInt();
+				const maySignature = view.getUint32(offset += 4, true);
+				header.crc32 = maySignature === 0x08074b50 ? view.getUint32(offset += 4) : maySignature;
+				header.compressedSize = view.getUint32(offset += 4);
+				header.uncompressedSize = view.getUint32(offset += 4);
 			}
+			const body = new U(view.buffer, offset + view.byteOffset, record.compressedSize);
 			return { header, body };
 		});
 	}
@@ -129,7 +81,7 @@ export class Extractor {
 			const reason = 'No content at the index: ' + index;
 			throw new Error(reason);
 		}
-		const stream = new Blob([content.body.slice()]).stream();
+		const stream = new Blob([content.body]).stream();
 		switch (content.header.method) {
 			case 0:
 				return new Response(stream);
@@ -147,9 +99,19 @@ export class Extractor {
 	 * @param {string} [encoding] encoding charset name
 	 * @returns {string[]} list of file names
 	 */
-	getPaths(encoding) {
+	getNames(encoding) {
 		const decoder = new TextDecoder(encoding);
-		return this.contents.map(content => decoder.decode(content.header.fileNameBytes))
+		return this.cd.map(cd => decoder.decode(cd.fileNameBytes));
+	}
+
+	*[Symbol.iterator]() {
+		for (let i = 0; i < this.contents.length; i++) {
+			yield {
+				entry: this.cd[i],
+				header: this.contents[i].header,
+				body: this.pick(i),
+			};
+		}
 	}
 }
 
@@ -159,7 +121,6 @@ export class Extractor {
 export class Builder {
 	static textDecoder = new TextDecoder();
 	static textEncoder = new TextEncoder();
-	static crc32 = new Crc32();
 
 	/** @type {CentralDirectoryEntry[]} */
 	centralDirectory = [];
@@ -171,7 +132,7 @@ export class Builder {
 	 * @prop {string} filepath File path
 	 * @prop {0|8} [method] Compression method
 	 * @prop {number} [lastModified] Last modified Unix timestamp
-	 * @prop {Uint8Array} [extraField] Byte array of extra field
+	 * @prop {Uint8Array<ArrayBuffer>} [extraField] Byte array of extra field
 	 * @prop {string} [comment] Comment of each item
 	 */
 	
@@ -195,7 +156,7 @@ export class Builder {
 	 * @returns {Promise<number>}
 	 */
 	async append(buf, opt) {
-		const uncompressed = new Uint8Array(buf);
+		const uncompressed = new U(buf);
 		const options = typeof opt === 'string' ? { filepath: opt } : opt;
 		const cd = new CentralDirectoryEntry();
 		const header = new LocalFileHeader();
@@ -207,9 +168,9 @@ export class Builder {
 		cd.isUtf8 = header.isUtf8 = true;
 		const fileNameBytes = Builder.textEncoder.encode(options.filepath);
 		cd.fileNameBytes = header.fileNameBytes = fileNameBytes;
-		cd.extraFieldBytes = header.extraFieldBytes = options.extraField ?? new Uint8Array();
+		cd.extraFieldBytes = header.extraFieldBytes = options.extraField ?? new U();
 		cd.commentBytes = Builder.textEncoder.encode(options.comment);
-		cd.crc32 = header.crc32 = Builder.crc32.calc(uncompressed);
+		cd.crc32 = header.crc32 = calcCrc32(uncompressed);
 		cd.uncompressedSize = header.uncompressedSize = uncompressed.length;
 		switch (method) {
 			case 0:
@@ -249,27 +210,27 @@ export class Builder {
 	 * @returns {Blob} result blob
 	 */
 	build(options) {
-		/** @type {Uint8Array<ArrayBuffer>[]} */
-		const blobPart = [];
+		/** @type {BufferSource[]} */
+		const blobParts = [];
 		let offset = 0;
 		const len = this.contents.length;
 		for (let i = 0; i < len; i++) {
 			this.centralDirectory[i].headerOffset = offset;
 			const { header, body } = this.contents[i];
-			const headerBytes = header.toBytes();
-			blobPart.push(headerBytes, body);
-			offset += headerBytes.length + body.length;
+			const parts = header.toBlobParts();
+			blobParts.push(...parts, body);
+			offset += parts.reduce((a, c) => a + c.byteLength, 0) + body.length;
 		}
-		const cdBytes = this.centralDirectory.map(cd => cd.toBytes());
-		blobPart.push(...cdBytes);
+		const cdBytes = this.centralDirectory.flatMap(cd => cd.toBlobParts());
+		blobParts.push(...cdBytes);
 		const eocd = new EndOfCentralDirectoryRecord();
 		eocd.numOfFiles = len;
 		eocd.totalNumOfFiles = len;
-		eocd.cdSize = cdBytes.reduce((a, c) => a + c.length, 0);
+		eocd.cdSize = cdBytes.reduce((a, c) => a + c.byteLength, 0);
 		eocd.cdOffset = offset;
 		eocd.commentBytes = Builder.textEncoder.encode(options?.comment);
-		blobPart.push(eocd.toBytes());
-		return new Blob(blobPart, { type: 'application/zip' });
+		blobParts.push(...eocd.toBlobParts());
+		return new Blob(blobParts, { type: 'application/zip' });
 	}
 }
 
@@ -333,8 +294,8 @@ class ZipDateTime {
  * @interface
  * @typedef PackageRecord
  * @prop {number} signature
- * @prop {() => Uint8Array<ArrayBuffer>} toBytes
- * @static @prop {(cursor: ByteArrayCursor) => PackageRecord} from
+ * @prop {() => BufferSource[]} toBlobParts
+ * @static @prop {(view: DataView<ArrayBuffer>) => PackageRecord} from
  */
 
 /**
@@ -350,50 +311,48 @@ class LocalFileHeader {
 	/** @type {number} */ crc32 = 0;
 	/** @type {number} */ compressedSize = 0;
 	/** @type {number} */ uncompressedSize = 0;
-	/** @type {Uint8Array} */ fileNameBytes;
-	/** @type {Uint8Array} */ extraFieldBytes;
+	/** @type {Uint8Array<ArrayBuffer>} */ fileNameBytes;
+	/** @type {Uint8Array<ArrayBuffer>} */ extraFieldBytes;
+	/** @type {number} */ length;
 
 	/**
 	 * Creates a new "Local File Header" record from bytes.
-	 * @param {ByteArrayCursor} cursor byte array cursor
+	 * @param {DataView<ArrayBuffer>} view byte array cursor
 	 * @returns {LocalFileHeader} new "Local File Header" record
 	 */
-	static from(cursor) {
+	static from(view) {
 		const record = new LocalFileHeader();
-		record.signature = cursor.readAsUint();
-		record.versionNeeded = cursor.readAsUshort();
-		record.flags = cursor.readAsUshort();
-		record.method = cursor.readAsUshort();
-		record.lastModified = ZipDateTime.fromInt(cursor.readAsUint());
-		record.crc32 = cursor.readAsUint();
-		record.compressedSize = cursor.readAsUint();
-		record.uncompressedSize = cursor.readAsUint();
+		record.signature = view.getUint32(0, true);
+		record.versionNeeded = view.getUint16(4, true);
+		record.flags = view.getUint16(6, true);
+		record.method = view.getUint16(8, true);
+		record.lastModified = ZipDateTime.fromInt(view.getUint32(10, true));
+		record.crc32 = view.getUint32(14, true);
+		record.compressedSize = view.getUint32(18, true);
+		record.uncompressedSize = view.getUint32(22, true);
 
-		const fileNameLength = cursor.readAsUshort();
-		const extraFieldLength = cursor.readAsUshort();
-		record.fileNameBytes = cursor.subarray(fileNameLength);
-		record.extraFieldBytes = cursor.subarray(extraFieldLength);
+		const fileNameLength = view.getUint16(26, true);
+		const extraFieldLength = view.getUint16(28, true);
+		const offset = view.byteOffset + 30;
+		record.fileNameBytes = new U(view.buffer, offset, fileNameLength);
+		record.extraFieldBytes = new U(view.buffer, offset + fileNameLength, extraFieldLength);
+		record.length = 30 + fileNameLength + extraFieldLength;
 		return record;
 	}
 
-	toBytes() {
-		const fileNameLength = this.fileNameBytes.length;
-		const extraFieldLength = this.extraFieldBytes.length;
-		const bytes = new Uint8Array(30 + fileNameLength + extraFieldLength);
-		const cursor = new ByteArrayCursor(bytes);
-		cursor.writeInt(this.signature);
-		cursor.writeUshort(this.versionNeeded);
-		cursor.writeUshort(this.flags);
-		cursor.writeUshort(this.method);
-		cursor.writeInt(this.lastModified.toInt());
-		cursor.writeInt(this.crc32);
-		cursor.writeInt(this.compressedSize);
-		cursor.writeInt(this.uncompressedSize);
-		cursor.writeUshort(fileNameLength);
-		cursor.writeUshort(extraFieldLength);
-		cursor.set(this.fileNameBytes);
-		cursor.set(this.extraFieldBytes);
-		return bytes;
+	toBlobParts() {
+		const view = new V(new ArrayBuffer(30));
+		view.setUint32(0, this.signature, true);
+		view.setUint16(4, this.versionNeeded, true);
+		view.setUint16(6, this.flags, true);
+		view.setUint16(8, this.method, true);
+		view.setUint32(10, this.lastModified.toInt(), true);
+		view.setUint32(14, this.crc32, true);
+		view.setUint32(18, this.compressedSize, true);
+		view.setUint32(22, this.uncompressedSize, true);
+		view.setUint16(26, this.fileNameBytes.length, true);
+		view.setUint16(28, this.extraFieldBytes.length, true);
+		return [view, this.fileNameBytes, this.extraFieldBytes];
 	}
 	
 	/**
@@ -461,7 +420,6 @@ class LocalFileHeader {
 
 /**
  * Class for Central Directory entry
- * @extends LocalFileHeader
  */
 class CentralDirectoryEntry extends LocalFileHeader {
 	/** @type {number} */ signature = 0x02014b50;
@@ -470,63 +428,58 @@ class CentralDirectoryEntry extends LocalFileHeader {
 	/** @type {number} */ internalAttributes = 0;
 	/** @type {number} */ externalAttributes = 0;
 	/** @type {number} */ headerOffset;
-	/** @type {Uint8Array} */ commentBytes;
+	/** @type {Uint8Array<ArrayBuffer>} */ commentBytes;
 
 	/**
 	 * Creates a new "Central Directory" entry from bytes.
-	 * @param {ByteArrayCursor} cursor byte array cursor
+	 * @param {DataView<ArrayBuffer>} view byte array cursor
 	 * @returns {CentralDirectoryEntry} new "Central Directory" entry
 	 */
-	static from(cursor) {
+	static from(view) {
 		const record = new CentralDirectoryEntry();
-		record.signature = cursor.readAsUint();
-		record.versionMadeBy = cursor.readAsUshort();
-		record.versionNeeded = cursor.readAsUshort();
-		record.flags = cursor.readAsUshort();
-		record.method = cursor.readAsUshort();
-		record.lastModified = ZipDateTime.fromInt(cursor.readAsUint());
-		record.crc32 = cursor.readAsUint();
-		record.compressedSize = cursor.readAsUint();
-		record.uncompressedSize = cursor.readAsUint();
-		const fileNameLength = cursor.readAsUshort();
-		const extraFieldLength = cursor.readAsUshort();
-		const commentLength = cursor.readAsUshort();
-		record.diskIdStart = cursor.readAsUshort();
-		record.internalAttributes = cursor.readAsUshort();
-		record.externalAttributes = cursor.readAsUint();
-		record.headerOffset = cursor.readAsUint();
-		record.fileNameBytes = cursor.subarray(fileNameLength);
-		record.extraFieldBytes = cursor.subarray(extraFieldLength);
-		record.commentBytes = cursor.subarray(commentLength);
+		record.signature = view.getUint32(0, true);
+		record.versionMadeBy = view.getUint16(4, true);
+		record.versionNeeded = view.getUint16(6, true);
+		record.flags = view.getUint16(8, true);
+		record.method = view.getUint16(10, true);
+		record.lastModified = ZipDateTime.fromInt(view.getUint32(12, true));
+		record.crc32 = view.getUint32(16, true);
+		record.compressedSize = view.getUint32(20, true);
+		record.uncompressedSize = view.getUint32(24, true);
+		const fLen = view.getUint16(28, true);
+		const eLen = view.getUint16(30, true);
+		const cLen = view.getUint16(32, true);
+		record.diskIdStart = view.getUint16(34, true);
+		record.internalAttributes = view.getUint16(36, true);
+		record.externalAttributes = view.getUint32(38, true);
+		record.headerOffset = view.getUint32(42, true);
+		const offset = view.byteOffset + 46;
+		record.fileNameBytes = new U(view.buffer, offset, fLen);
+		record.extraFieldBytes = new U(view.buffer, offset + fLen, eLen);
+		record.commentBytes = new U(view.buffer, offset + fLen + eLen, cLen);
+		record.length = 46 + fLen + eLen + cLen;
 		return record;
 	}
 
-	toBytes() {
-		const fileNameLength = this.fileNameBytes.length;
-		const extraFieldLength = this.extraFieldBytes.length;
-		const commentLength = this.commentBytes.length;
-		const bytes = new Uint8Array(46 + fileNameLength + extraFieldLength + commentLength);
-		const cursor = new ByteArrayCursor(bytes);
-		cursor.writeInt(this.signature);
-		cursor.writeUshort(this.versionMadeBy);
-		cursor.writeUshort(this.versionNeeded);
-		cursor.writeUshort(this.flags);
-		cursor.writeUshort(this.method);
-		cursor.writeInt(this.lastModified.toInt());
-		cursor.writeInt(this.crc32);
-		cursor.writeInt(this.compressedSize);
-		cursor.writeInt(this.uncompressedSize);
-		cursor.writeUshort(fileNameLength);
-		cursor.writeUshort(extraFieldLength);
-		cursor.writeUshort(commentLength);
-		cursor.writeUshort(this.diskIdStart);
-		cursor.writeUshort(this.internalAttributes);
-		cursor.writeInt(this.externalAttributes);
-		cursor.writeInt(this.headerOffset);
-		cursor.set(this.fileNameBytes);
-		cursor.set(this.extraFieldBytes);
-		cursor.set(this.commentBytes);
-		return bytes;
+	toBlobParts() {
+		const view = new V(new ArrayBuffer(46));
+		view.setUint32(0, this.signature, true);
+		view.setUint16(4, this.versionMadeBy, true);
+		view.setUint16(6, this.versionNeeded, true);
+		view.setUint16(8, this.flags, true);
+		view.setUint16(10, this.method, true);
+		view.setUint32(12, this.lastModified.toInt(), true);
+		view.setUint32(16, this.crc32, true);
+		view.setUint32(20, this.compressedSize, true);
+		view.setUint32(24, this.uncompressedSize, true);
+		view.setUint16(28, this.fileNameBytes.length, true);
+		view.setUint16(30, this.extraFieldBytes.length, true);
+		view.setUint16(32, this.commentBytes.length, true);
+		view.setUint16(34, this.diskIdStart, true);
+		view.setUint16(36, this.internalAttributes, true);
+		view.setUint32(38, this.externalAttributes, true);
+		view.setUint32(42, this.headerOffset, true);
+		return [view, this.fileNameBytes, this.extraFieldBytes, this.commentBytes];
 	}
 }
 
@@ -542,162 +495,40 @@ class EndOfCentralDirectoryRecord {
 	/** @type {number} */ totalNumOfFiles = 0;
 	/** @type {number} */ cdSize;
 	/** @type {number} */ cdOffset;
-	/** @type {Uint8Array} */ commentBytes;
+	/** @type {Uint8Array<ArrayBuffer>} */ commentBytes;
+	/** @type {number} */ length;
 
 	/**
 	 * Creates a new <abbr>EOCD</abbr> (End of Central Directory) record from bytes.
-	 * @param {ByteArrayCursor} cursor byte array cursor
+	 * @param {DataView<ArrayBuffer>} view byte array cursor
 	 * @returns {EndOfCentralDirectoryRecord} new EOCD record
 	 */
-	static from(cursor) {
+	static from(view) {
 		const record = new EndOfCentralDirectoryRecord();
-		record.signature = cursor.readAsUint();
-		record.diskId = cursor.readAsUshort();
-		record.firstDiskId = cursor.readAsUshort();
-		record.numOfFiles = cursor.readAsUshort();
-		record.totalNumOfFiles = cursor.readAsUshort();
-		record.cdSize = cursor.readAsUint();
-		record.cdOffset = cursor.readAsUint();
-		const commentLength = cursor.readAsUshort();
-		record.commentBytes = cursor.subarray(commentLength);
+		record.signature = view.getUint32(0, true);
+		record.diskId = view.getUint16(4, true);
+		record.firstDiskId = view.getUint16(6, true);
+		record.numOfFiles = view.getUint16(8, true);
+		record.totalNumOfFiles = view.getUint16(10, true);
+		record.cdSize = view.getUint32(12, true);
+		record.cdOffset = view.getUint32(16, true);
+		const cLen = view.getUint16(20, true);
+		const offset = view.byteOffset + 22;
+		record.commentBytes = new U(view.buffer, offset, cLen);
+		record.length = 22 + cLen;
 		return record;
 	}
 
-	toBytes() {
-		const commentLength = this.commentBytes.length;
-		const bytes = new Uint8Array(22 + commentLength);
-		const cursor = new ByteArrayCursor(bytes);
-		cursor.writeInt(this.signature);
-		cursor.writeUshort(this.diskId);
-		cursor.writeUshort(this.firstDiskId);
-		cursor.writeUshort(this.numOfFiles);
-		cursor.writeUshort(this.totalNumOfFiles);
-		cursor.writeInt(this.cdSize);
-		cursor.writeInt(this.cdOffset);
-		cursor.writeUshort(commentLength);
-		cursor.set(this.commentBytes);
-		return bytes;
-	}
-}
-
-/**
- * Class for viewing and editing ArrayBuffer in little endian
- */
-class ByteArrayCursor {
-	/** @type {number} */ #offset = 0;
-	/** @type {Uint8Array<ArrayBuffer>} */ bytes;
-
-	/**
-	 * @returns {number} Offset index
-	 */
-	get offset() {
-		return this.#offset;
-	}
-
-	/**
-	 * @param {number} v New offset index
-	 */
-	set offset(v) {
-		if (v <= this.bytes.length) this.#offset = v;
-		else throw new Error('Index is invalid: ' + v);
-	}
-
-	/**
-	 * Creates a cursor of byte array.
-	 * @param {Uint8Array<ArrayBuffer>} bytes Byte array
-	 */
-	constructor(bytes) {
-		this.bytes = bytes;
-	}
-
-	/**
-	 * Reads the value at the current offset as a byte.
-	 * @returns {number} Byte
-	 */
-	read() {
-		return this.bytes[this.offset++];
-	}
-
-	/**
-	 * Writes a byte at the current offset.
-	 * @param {number} b Byte
-	 */
-	write(b) {
-		this.bytes[this.offset++] = b;
-	}
-
-	/**
-	 * Reads the value at the current offset as an unsigned short.
-	 * @returns {number} Unsigned short
-	 */
-	readAsUshort() {
-		return this.read() + (this.read() << 8);
-	}
-
-	/**
-	 * Writes an unsigned short at the current offset.
-	 * @param {number} s Unsigned short
-	 */
-	writeUshort(s) {
-		this.write(s & 0xff);
-		this.write(s >>> 8 & 0xff);
-	}
-
-	/**
-	 * Reads the value at the current offset as an signed integer.
-	 * @returns {number} Signed integer
-	 */
-	readAsInt() {
-		return this.read() + (this.read() << 8) + (this.read() << 16) + (this.read() << 24);
-	}
-
-	/**
-	 * Writes a signed/an unsigned integer at the current offset.
-	 * @param {number} i Signed/unsigned integer
-	 */
-	writeInt(i) {
-		this.write(i & 0xff);
-		this.write(i >>> 8 & 0xff);
-		this.write(i >>> 16 & 0xff);
-		this.write(i >>> 24 & 0xff);
-	}
-
-	/**
-	 * Reads the value at the current offset as an unsigned integer.
-	 * @returns {number} Unsigned integer
-	 */
-	readAsUint() {
-		return this.readAsInt() >>> 0;
-	}
-
-	/**
-	 * Gets a new Uint8Array view at the current offset.
-	 * @param {number} length Length of subarray
-	 */
-	subarray(length) {
-		const sub = this.bytes.subarray(this.offset, this.offset + length);
-		this.offset += length;
-		return sub;
-	}
-
-	/**
-	 * Sets a byte array at the current offset.
-	 * @param {Uint8Array} bytes Byte array
-	 */
-	set(bytes) {
-		const nextOffset = bytes.length + this.offset;
-		if (this.bytes.length < nextOffset) {
-			throw new Error('Index is invalid: ' + nextOffset);
-		}
-		this.bytes.set(bytes, this.offset);
-		this.offset = nextOffset;
-	}
-
-	/**
-	 * Moves cursor to index.
-	 * @param {number} index Index of byte array
-	 */
-	moveTo(index) {
-		this.offset = index;
+	toBlobParts() {
+		const view = new V(new ArrayBuffer(22));
+		view.setUint32(0, this.signature, true);
+		view.setUint16(4, this.diskId, true);
+		view.setUint16(6, this.firstDiskId, true);
+		view.setUint16(8, this.numOfFiles, true);
+		view.setUint16(10, this.totalNumOfFiles, true);
+		view.setUint32(12, this.cdSize, true);
+		view.setUint32(16, this.cdOffset, true);
+		view.setUint16(20, this.commentBytes.length, true);
+		return [view, this.commentBytes];
 	}
 }
