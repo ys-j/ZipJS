@@ -38,7 +38,7 @@ export const fmtCrc32 = int32 => {
 export class Extractor {
 	/** @type {EndOfCentralDirectoryRecord} */ eocd;
 	/** @type {CentralDirectoryEntry[]} */ cd;
-	/** @type {Array<{ header: LocalFileHeader, body: Uint8Array<ArrayBuffer> }> } */ contents;
+	/** @type {Array<{ header: LocalFileHeader, body: Uint8Array<ArrayBuffer> }> } */ contents = [];
 
 	/**
 	 * Creates a Zip Extractor object from an array buffer.
@@ -56,19 +56,22 @@ export class Extractor {
 			cdOffset += entry.length;
 			return entry;
 		});
-		this.contents = this.cd.map(record => {
-			const view = new V(buffer, record.headerOffset);
+		const offsets = this.cd.map(cd => cd.headerOffset);
+		for (let i = 0; i < offsets.length; i++) {
+			const cd = this.cd[i];
+			const thisOffset = offsets[i];
+			const nextOffset = offsets.at(i + 1) || this.eocd.cdOffset;
+			const view = new V(buffer, thisOffset, nextOffset - thisOffset);
 			const header = LocalFileHeader.from(view);
-			let offset = header.length;
-			if (header.hasDataDescriptor) {
-				const maySignature = view.getUint32(offset += 4, true);
-				header.crc32 = maySignature === 0x08074b50 ? view.getUint32(offset += 4) : maySignature;
-				header.compressedSize = view.getUint32(offset += 4);
-				header.uncompressedSize = view.getUint32(offset += 4);
+			if (header.hasDataDescriptor && header.isCentralDirectoryEncrypted) {
+				const dataDescriptor = new Uint32Array(buffer, nextOffset - 12, 12);
+				cd.crc32 = dataDescriptor[1];
+				cd.compressedSize = dataDescriptor[2];
+				cd.uncompressedSize = dataDescriptor[3];
 			}
-			const body = new U(view.buffer, offset + view.byteOffset, record.compressedSize);
-			return { header, body };
-		});
+			const body = new U(view.buffer, cd.headerOffset + header.length, cd.compressedSize);
+			this.contents.push({ header, body });
+		}
 	}
 
 	/**
