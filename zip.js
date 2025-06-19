@@ -94,7 +94,7 @@ export class Extractor {
 				return new Response(stream.pipeThrough(decompression));
 			default:
 				const reason = 'Unsupported compression method: ' + content.header.method;
-				throw new Error(reason);
+				return new Response(null, { status: 418, statusText: reason });
 		}
 	}
 
