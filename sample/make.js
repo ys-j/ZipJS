@@ -44,15 +44,25 @@ async function onSubmit(e) {
 	const file = /** @type {HTMLInputElement} */ ($form.file)?.files?.[0];
 	if (!file) return;
 
-	document.body.style.cursor = 'wait';
-	const buf = await file.arrayBuffer();
-	const isZip = String.fromCharCode(...new Uint8Array(buf).subarray(0, 2)) === 'PK';
-	await builder.append(buf, {
-		filepath: file.name,
-		lastModified: file.lastModified,
-		method: isZip ? 0 : 8,
-	});
-	document.body.style.cursor = 'auto';
+	document.documentElement.style.cursor = 'wait';
+	const startTime = performance.now();
+	try {
+		const buf = await file.arrayBuffer();
+		const isZip = String.fromCharCode(...new Uint8Array(buf).subarray(0, 2)) === 'PK';
+		await builder.append(buf, {
+			filepath: file.name,
+			lastModified: file.lastModified,
+			method: isZip ? 0 : 8,
+		});
+	} catch (e) {
+		console.error(e);
+		alert(e);
+		return;
+	} finally {
+		const endTime = performance.now();
+		$form.elements['time'].value = ((endTime - startTime) / 1000).toFixed(3);
+		document.documentElement.style.cursor = 'auto';
+	}
 
 	if (!$tbody) return;
 	$tbody.innerHTML = '';

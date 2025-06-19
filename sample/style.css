@@ -1,3 +1,6 @@
+:root {
+	height: 100%;
+}
 th, td {
 	padding: 4px 8px;
 }
@@ -7,15 +10,6 @@ th {
 td {
 	tr:not(:first-of-type) & {
 		border-top: 1px solid gray;
-	}
-	&.r {
-		text-align: right;
-	}
-	&.c {
-		text-align: center;
-	}
-	&.tt {
-		font-family: 'Cascadia Code', Consolas, monospace;
 	}
 	a:not(:hover) {
 		text-decoration: none;
@@ -32,4 +26,13 @@ button {
 	&.delete::before {
 		content: '削除';
 	}
+}
+.r {
+	text-align: right;
+}
+.c {
+	text-align: center;
+}
+.tt {
+	font-family: 'Cascadia Code', Consolas, monospace;
 }

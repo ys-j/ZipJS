@@ -62,7 +62,8 @@ async function onSubmit(e) {
 	if (!file) return;
 
 	let zip;
-	document.body.style.cursor = 'wait';
+	document.documentElement.style.cursor = 'wait';
+	const startTime = performance.now();
 	try {
 		zip = new ZipFile.Extractor(await file.arrayBuffer());
 	} catch (e) {
@@ -70,7 +71,9 @@ async function onSubmit(e) {
 		alert(e);
 		return;
 	} finally {
-		document.body.style.cursor = 'auto';
+		const endTime = performance.now();
+		$form.elements['time'].value = ((endTime - startTime) / 1000).toFixed(3);
+		document.documentElement.style.cursor = 'auto';
 	}
 
 	if (!$tbody) return;
@@ -110,6 +113,7 @@ async function onSubmit(e) {
 				if ($a.getAttribute('href') === '#') {
 					e.preventDefault();
 					try {
+						if (!content.body.ok) throw new Error(content.body.statusText);
 						if (cd.isEncrypted) throw new Error('Encypted file is not supported.');
 						if (cd.versionNeeded > 20) throw new Error('Version greater than 20 is not supported: ' + cd.versionNeeded);
 						const blob = await content.body.blob();
