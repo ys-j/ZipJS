@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>Excel Viewer</title>
+<link rel=stylesheet href=viewer.css>
+<div>
+	<form name=form>
+		<input type=file name=file accept=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet>
+		<input type=submit>
+	</form>
+</div>
+<div id=contents>
+	<header></header>
+	<main id=main></main>
+	<footer>
+		<div id=tablist role=tablist></div>
+	</footer>
+</div>
+<script type=module src=excel.js></script>

@@ -12,24 +12,25 @@ const crc32table = Uint32Array.from({ length: 256 }, (_, i) => {
 });
 
 /**
- * Calculate CRC-32 from a byte array.
- * @param {Uint8Array<ArrayBuffer>} bytes Byte array
- * @returns {number} CRC-32
+ * Calculate new CRC-32 from a byte array.
+ * @param {Uint8Array<ArrayBuffer>} bytes byte array
+ * @param {number} initial initial CRC-32
+ * @returns {number} new CRC-32
  */
-export const calcCrc32 = bytes => {
-	let c = 0xffffffff;
+export const calcCrc32 = (bytes, initial = 0xffffffff) => {
+	let c = initial;
 	for (const b of bytes) c = crc32table[(c ^ b) & 0xff] ^ (c >>> 8);
 	return c ^ 0xffffffff;
 };
 
 /**
  * Formats CRC-32 (int32) to hex string.
- * @param {number} int32 CRC-32
- * @returns {string} Hex string
+ * @param {number} u32 CRC-32
+ * @returns {string} hex string
  */
-export const fmtCrc32 = int32 => {
-	const octets = [24, 16, 8, 0].map(shift => int32 >>> shift & 0xff);
-	return octets.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+export const fmtCrc32 = u32 => {
+	const octets = Uint8Array.from([24, 16, 8, 0], shift => u32 >>> shift & 0xff);
+	return Array.from(octets, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
 };
 
 /**
@@ -98,6 +99,38 @@ export class Extractor {
 		}
 	}
 
+	// /**
+	//  * 
+	//  * @param {string} password 
+	//  * @param {number} index 
+	//  */
+	// decrypt(password, index) {
+	// 	const keys = Uint32Array.of(0x12345678, 0x23456789, 0x34567890);
+	// 	/** @type {(b: number) => void} */
+	// 	const updateKeys = b => {
+	// 		keys[0] = crc32table[(keys[0] ^ b) & 0xff] ^ (keys[0] >>> 8);
+	// 		keys[1] = Math.imul(keys[1] + (keys[0] & 0xff), 0x08088405) + 1;
+	// 		keys[2] = crc32table[(keys[2] ^ (keys[1] >>> 24)) & 0xff] ^ (keys[2] >>> 8);
+	// 	};
+	// 	/** @type {(bytes: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>} */
+	// 	const decryptBytes = bytes => Uint8Array.from(bytes, b => {
+	// 		const t = keys[2] | 2;
+	// 		const c = b ^ (Math.imul(t, t ^ 1) >>> 8) & 0xff;
+	// 		updateKeys(c);
+	// 		return c;
+	// 	});
+	// 	for (let i = 0; i < password.length; i++) updateKeys(password.charCodeAt(i));
+	// 	const content = this.contents[index];
+	// 	const decrypted = decryptBytes(content.body);
+	// 	if (content.header.crc32 >>> 24 === decrypted[11]) {
+	// 		const decoder = new TextDecoder();
+	// 		console.log(decoder.decode(decrypted));
+	// 		content.body = decrypted.subarray(12);
+	// 	} else {
+	// 		throw new Error('Wrong password.');
+	// 	}
+	// }
+
 	/**
 	 * Gets a list of file names with specific encoding.
 	 * @param {string} [encoding] encoding charset name
@@ -114,6 +147,13 @@ export class Extractor {
 				entry: this.cd[i],
 				header: this.contents[i].header,
 				body: this.pick(i),
+				// /** @type {(password: string) => void} */
+				// decrypt: password => {
+				// 	this.decrypt.call(this, password, i);
+				// 	const newBody = this.contents[i].body.subarray(12);
+				// 	const crc32 = calcCrc32(newBody);
+				// 	console.log(crc32, this.cd[i].crc32);
+				// },
 			};
 		}
 	}
@@ -303,13 +343,17 @@ class ZipDateTime {
  */
 
 /**
+ * @typedef {false | "traditional" | "strong" | "wzAES"} EncryptionMethod
+ */
+
+/**
  * Class for Local File Header
  * @implements PackageRecord
  */
 class LocalFileHeader {
 	/** @type {number} */ signature = 0x04034b50;
 	/** @type {number} */ versionNeeded = 20;
-	/** @type {number} */ flags = 1024;
+	/** @type {number} */ flags = 0;
 	/** @type {number} */ method = 8;
 	/** @type {ZipDateTime} */ lastModified = ZipDateTime.fromDate();
 	/** @type {number} */ crc32 = 0;
@@ -358,67 +402,58 @@ class LocalFileHeader {
 		view.setUint16(28, this.extraFieldBytes.length, true);
 		return [view, this.fileNameBytes, this.extraFieldBytes];
 	}
-	
-	/**
-	 * 
-	 * @param {number} i index
-	 * @returns {boolean} flag value
-	 */
-	getFlag(i) {
-		return (this.flags >> i & 1) === 1;
-	}
-	/**
-	 * 
-	 * @param {number} i index
-	 * @param {boolean} b flag value
-	 */
-	setFlag(i, b) {
-		const v = 1 << i;
-		if (b) this.flags |= v;
-		else this.flags &= ~v;
-	}
 
-	get isEncrypted() {
-		return this.getFlag(0);
+	/**
+	 * @returns {EncryptionMethod}
+	 */
+	get encryption() {
+		if (this.method === 63) return 'wzAES';
+		if (this.flags & 1) return this.flags & 64 ? 'strong' : 'traditional';
+		return false;
 	}
-	set isEncrypted(b) {
-		this.setFlag(0, b);
+	/**
+	 * @param {EncryptionMethod} method 
+	 */
+	set encryption(method) {
+		if (method) {
+			switch (method) {
+				case 'wzAES':
+					this.method = 63;
+					this.flags &= 0xffbf;
+					break;
+				case 'strong':
+					this.flags |= 65;
+					break;
+				case "traditional":
+					this.flags &= 0xffbf;
+					this.flags |= 1;
+			}
+		} else {
+			this.flags &= 65470;
+		}
 	}
 	get hasDataDescriptor() {
-		return this.getFlag(3);
-	}
-	set hasDataDescriptor(b) {
-		this.setFlag(3, b);
+		return !!(this.flags & 8);
 	}
 	get isEnhancedDeflating() {
-		return this.getFlag(4);
-	}
-	set isEnhancedDeflating(b) {
-		this.setFlag(4, b);
+		return !!(this.flags & 16);
 	}
 	get isCompressedPatchedData() {
-		return this.getFlag(5);
-	}
-	set isCompressedPatchedData(b) {
-		this.setFlag(5, b);
-	}
-	get isEncryptedStrongly() {
-		return this.getFlag(6);
-	}
-	set isEncryptedStrongly(b) {
-		this.setFlag(6, b);
+		return !!(this.flags & 32);
 	}
 	get isUtf8() {
-		return this.getFlag(11);
+		return !!(this.flags & 2048);
 	}
 	set isUtf8(b) {
-		this.setFlag(11, b);
+		if (b) this.flags |= 2048;
+		else this.flags &= 0xff7f;
 	}
 	get isCentralDirectoryEncrypted() {
-		return this.getFlag(13);
+		return !!(this.flags & 8192);
 	}
 	set isCentralDirectoryEncrypted(b) {
-		this.setFlag(13, b);
+		if (b) this.flags |= 8192;
+		else this.flags &= 0xdfff;
 	}
 }
 

@@ -114,7 +114,16 @@ async function onSubmit(e) {
 					e.preventDefault();
 					try {
 						if (!content.body.ok) throw new Error(content.body.statusText);
-						if (cd.isEncrypted) throw new Error('Encypted file is not supported.');
+						if (cd.encryption) {
+							if (cd.encryption === 'traditional') {
+								const password = 'password';
+								// const password = prompt('Enter password.');
+								if (password) content.decrypt(password);
+								else return;
+							} else {
+								throw new Error('Encypted file is not supported.');
+							}
+						}
 						if (cd.versionNeeded > 20) throw new Error('Version greater than 20 is not supported: ' + cd.versionNeeded);
 						const blob = await content.body.blob();
 						$a.href = URL.createObjectURL(blob);
