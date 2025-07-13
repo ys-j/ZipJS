@@ -1,5 +1,5 @@
 import * as ZipFile from '../zip.js';
-import { WorkbookPackage, WorkbookPart, WorksheetPart, CellReference, Row, Cell, StylesPart, RichTextRun, CellText } from './spreadsheetml.mjs'
+import { WorkbookPackage, WorkbookPart, WorksheetPart, CellReference, Row, Cell, StylesPart, RichTextRun, CellText, Color } from './spreadsheetml.mjs'
 
 const $main = /** @type {} */ document.getElementById('main');
 const $tablist = document.getElementById('tablist')
@@ -43,6 +43,7 @@ $form.addEventListener('submit', async e => {
 					document.body.style.cursor = 'wait';
 					await renderWorksheet(s.part, section);
 				} catch (e) {
+					console.error(e);
 					alert('Sorry, failed to open the workbook.\n' + e.message);
 				} finally {
 					document.body.style.cursor = '';
@@ -68,7 +69,111 @@ $form.addEventListener('submit', async e => {
  * @param {HTMLElement} $section output `<section>` element
  */
 async function renderWorksheet(wsPart, $section) {
+	const root = $section.attachShadow({ mode: 'closed' });
 	await sleep(0);
+
+	// style
+	const $link = document.createElement('link');
+	$link.rel = 'stylesheet';
+	$link.href = 'sheet.css';
+	root.append($link);
+
+	const css = new CSSStyleSheet();
+	const stylesPart = wsPart.workbook.stylesPart;
+	if (stylesPart)
+	stylesPart.cellFormats.forEach((xf, i) => {
+		/** @type {Map<string, string>} */
+		const props = new Map();
+		if (xf.fontId > 0) {
+			const font = stylesPart.fonts[xf.fontId];
+			if (font.name) props.set('font-family', `"${font.name}"`);
+			if (font.bold) props.set('font-weight', 'bold');
+			if (font.italic) props.set('font-style', 'italic');
+			if (font.strike) props.set('text-decoration-line', 'line-through');
+			if (font.color) props.set('color', font.color.toString());
+			if (font.size) props.set('font-size', `${font.size}pt`);
+			switch (font.underline) {
+				case 'single':
+				case 'singleAccounting':
+					props.set('border-bottom', 'thin solid');
+					break;
+				case 'double':
+				case 'doubleAccounting':
+					props.set('border-bottom', 'medium double');
+			}
+			switch (font.verticalAlign) {
+				case 'subscript':
+					props.set('vertical-align', 'sub');
+					break;
+				case 'superscript':
+					props.set('vertical-align', 'super');
+			}
+		}
+		if (xf.alignment) {
+			/** @type {Map<string, string>} */
+			const childProps = new Map();
+			const horizontal = xf.alignment.horizontal;
+			switch (horizontal) {
+				case 'left':
+				case 'center':
+				case 'right':
+				case 'justify':
+					props.set('text-align', horizontal);
+					childProps.set('text-align', horizontal);
+					break;
+				case 'fill':
+				case 'distributed':
+					props.set('text-align', 'justify');
+					childProps.set('text-align', 'justify');
+					break;
+				case 'centerContinuous':
+					props.set('text-align', 'center');
+					childProps.set('text-align', 'center');
+					break;
+			}
+			switch (xf.alignment.vertical) {
+				case 'top':
+					childProps.set('margin-bottom', 'auto');
+					break;
+				case 'center':
+					childProps.set('margin-bottom', 'auto');
+				case 'top':
+					childProps.set('margin-top', 'auto');
+					break;
+			}
+			if (xf.alignment.wrapText) props.set('white-space', 'pre-wrap !important');
+			css.insertRule(`[data-style="${i}"]>span{${Array.from(childProps.entries(), ([k, v]) => k + ':' + v).join(';')}}`);
+		}
+		if (xf.borderId > 0) {
+			const border = stylesPart.borders[xf.borderId];
+			const borderDict = {
+				none: 'none',
+				thin: 'thin solid',
+				medium: 'medium solid',
+				dashed: 'thin dashed',
+				dotted: 'thin dotted',
+				thick: 'thick solid',
+				double: 'medium double',
+				hair: '.5px solid',
+				mediumDashed: 'medium dashed',
+				dashDot: 'thin dashed',
+				mediumDashdot: 'medium dashed',
+				dashDotDot: 'thin dashed',
+				mediumDashDotDot: 'medium dashed',
+				slantDashDot: 'none',
+			};
+			for (const dir of ['top', 'right', 'bottom', 'left']) {
+				/** @type { { style: string?, color?: Color } } */
+				const { style, color } = border[dir];
+				if (style && style !== 'none') {
+					props.set(`border-${dir}`, borderDict[style] + (color ? ' ' + color.toString() : ''));
+				}
+			}
+		}
+		css.insertRule(`[data-style="${i}"]{${Array.from(props.entries(), ([k, v]) => k + ':' + v).join(';')}}`);
+	});
+	root.adoptedStyleSheets.push(css);
+
 	const dimensionEnd = wsPart.dimension.end;
 
 	// layout
@@ -105,7 +210,7 @@ async function renderWorksheet(wsPart, $section) {
 		$section.style.gridTemplateColumns = `auto repeat(${dimensionEnd.c}, 72px)`;
 	}
 	
-	$section.append($topleft, $topright, $bottomleft);
+	root.append($topleft, $topright, $bottomleft);
 
 	const $contents = document.createElement('div');
 	$contents.classList.add('contents');
@@ -124,6 +229,7 @@ async function renderWorksheet(wsPart, $section) {
 			$cell.style.gridArea = `${ref.r + 1} / ${ref.c + 1}`;
 			$contents.appendChild($cell);
 		}
+		$contents.lastElementChild?.classList.add('right');
 	}
 
 	// merged cells
@@ -135,6 +241,7 @@ async function renderWorksheet(wsPart, $section) {
 				$beginCell.classList.add('merged');
 				$beginCell.style.gridArea = `${range.begin.r + 1} / ${range.begin.c + 1} / span ${range.height} / span ${range.width}`;
 				let w = range.width, h = range.begin.r;
+				if (range.end.c === dimensionEnd.c) $beginCell.classList.add('right');
 				while (w-- > 1) $beginCell.nextElementSibling?.remove();
 				while (++h <= range.end.r) {
 					const ref = new CellReference(h, range.begin.c);
@@ -146,7 +253,7 @@ async function renderWorksheet(wsPart, $section) {
 			}
 		}
 	}
-	$section.appendChild($contents);
+	root.appendChild($contents);
 
 	// cell value
 	const rowHeights = new Array(dimensionEnd.r + 1).fill('25px');
@@ -175,115 +282,46 @@ async function renderWorksheet(wsPart, $section) {
  */
 function formatCell($cell, cell, wbpart) {
 	const v = cell.value;
-	if (!v) return;
-	const stylesPart = wbpart.stylesPart;
-	let text;
-	if (cell.dataType === 's') {
-		const si = wbpart.sharedStringList[/** @type {number} */ (v)];
-		const el = si.toHTMLElement(wbpart);
-		if (el instanceof DocumentFragment) {
-			$cell.appendChild(el);
-			return;
-		} else {
-			text = el.textContent;
-		}
-	} else if (cell.dataType === 'inlineStr') {
-		const fragment = document.createDocumentFragment();
-		for (const child of /** @type {Element} */ (v).children) {
-			switch (child.tagName) {
-				case 't':
-					fragment.appendChild(new CellText(child).toHTMLElement());
-					break;
-				case 'r':
-					const last = /** @type {HTMLElement?} */ (fragment.lastElementChild);
-					if (last && child?.style.cssText === last?.style.cssText) {
-						last.appendChild(new Text(child.textContent || ''));
-					} else {
+	let content;
+	if (v !== null) {
+		if (cell.dataType === 's') {
+			const si = wbpart.sharedStringList[/** @type {number} */ (v)];
+			const el = si.toHTMLElement(wbpart);
+			if (el instanceof DocumentFragment) {
+				content = el;
+			} else {
+				content = el.textContent;
+			}
+		} else if (cell.dataType === 'inlineStr') {
+			const fragment = document.createDocumentFragment();
+			for (const child of /** @type {Element} */ (v).children) {
+				switch (child.tagName) {
+					case 't':
+						fragment.appendChild(new CellText(child).toHTMLElement());
+						break;
+					case 'r':
+						// const last = /** @type {HTMLElement?} */ (fragment.lastElementChild);
 						fragment.appendChild(new RichTextRun(child, wbpart).toHTMLElement());
-					}
+				}
 			}
+			$cell.appendChild(fragment);
+		} else {
+			console.log(cell.valueAsString);
+			content ||= cell.valueAsString;
 		}
-		$cell.appendChild(fragment);
-		return;
 	}
-	text ||= cell.valueAsString;
-	if (cell.styleIndex && stylesPart) {
-		const xf = stylesPart.cellFormats[cell.styleIndex];
-		const font = stylesPart.fonts[xf.fontId];
-		/** @type {"sup" | "sub" | "span"} */
-		const tagName = ({ superscript: 'sup', subscript: 'sub' })[font.verticalAlign] || 'span';
-		/** @type {HTMLElement} */
-		const span = document.createElement(tagName);
-		if (xf.fontId > 0) {
-			if (font.name) span.style.fontFamily = `"${font.name}"`;
-			if (font.bold) span.style.fontWeight = 'bold';
-			if (font.italic) span.style.fontStyle = 'italic';
-			if (font.strike) span.style.textDecorationLine = 'line-through';
-			if (font.color) span.style.color = font.color.toString();
-			if (font.size) span.style.fontSize = `${font.size}pt`;
-			switch (font.underline) {
-				case 'single':
-				case 'singleAccounting':
-					span.style.borderBottom = 'thin solid';
-					break;
-				case 'double':
-				case 'doubleAccounting':
-					span.style.borderBottom = 'medium double'
-			}
-		}
-		if (xf.alignment) {
-			const horizontal = xf.alignment.horizontal;
-			switch (horizontal) {
-				case 'left':
-				case 'center':
-				case 'right':
-				case 'justify':
-					span.style.textAlign = horizontal;
-					break;
-				case 'fill':
-				case 'distributed':
-					span.style.textAlign = 'justify';
-					break;
-				case 'centerContinuous':
-					span.style.textAlign = 'center';
-					break;
-			}
-			const vertical = xf.alignment.vertical;
-			if (vertical) span.classList.add(`vertical-${vertical}`);
-			const wrapText = xf.alignment.wrapText;
-			if (wrapText) span.classList.add('wrap');
-		}
-		if (xf.borderId > 0) {
-			const border = stylesPart.borders[xf.borderId];
-			const borderMap = {
-				none: 'none',
-				thin: 'thin solid',
-				medium: 'medium solid',
-				dashed: 'thin dashed',
-				dotted: 'thin dotted',
-				thick: 'thick solid',
-				double: 'medium double',
-				hair: '.5px solid',
-				mediumDashed: 'medium dashed',
-				dashDot: 'thin dashed',
-				mediumDashdot: 'medium dashed',
-				dashDotDot: 'thin dashed',
-				mediumDashDotDot: 'medium dashed',
-				slantDashDot: 'none',
-			};
-			for (const dir of ['top', 'right', 'bottom', 'left']) {
-				const { style, color } = border[dir];
-				$cell.style.setProperty(`border-${dir}`, borderMap[style] + (color ? ' ' + color.toString() : ''));
-				if (style !== 'none') $cell.classList.add(`border-${dir}`);
-			}
-		}
-		span.textContent = text;
+	if (content)
+	if (cell.styleIndex) {
+		const span = document.createElement('span');
+		span.append(content);
 		$cell.appendChild(span);
-		return;
 	} else {
-		$cell.appendChild(new Text(text));
-		return;
+		$cell.append(content);
 	}
+	// if ($cell.classList.contains('border-top')) {
+	// 	const $upperCell = $cell.parentElement?.querySelector(`#cell-${cell.ref?.getColName()}${cell.ref?.r}`);
+	// 	if ($upperCell) $upperCell.classList.remove('border-bottom');
+	// }
 }
 
 /**

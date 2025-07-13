@@ -1,0 +1,69 @@
+:host {
+	border-bottom: 1px solid #aaa;
+}
+:host > div:not(.header-topleft) {
+	display: contents;
+}
+:host > :not(div) {
+	display: none;
+}
+:host > div > *,
+.header-topleft {
+	border-top: 1px solid #aaa;
+	border-left: 1px solid #aaa;
+	cursor: cell;
+	display: block;
+	overflow: clip;
+	white-space: pre;
+	scroll-snap-align: start;
+}
+.header-topleft {
+	left: 0;
+	top: 0;
+	z-index: 2 !important;
+}
+.header-columns > * {
+	top: 0;
+}
+.header-rows > * {
+	left: 0;
+	padding: 0 5px;
+}
+[class|=header] {
+	background-color: #eee;
+	cursor: default;
+	position: sticky;
+	text-align: center;
+	z-index: 1;
+}
+[data-text]::after {
+	content: attr(data-text);
+}
+.cell {
+	padding: 0 2.5px;
+}
+.header-columns > :last-child,
+.cell.right {
+	border-right: 1px solid #aaa;
+}
+.cell:has(+ :empty) {
+	overflow-x: visible;
+}
+.cell:not(:empty) {
+	display: flex;
+}
+.cell:has(> :only-child) {
+	flex-direction: column;
+
+}
+.cell:has(:nth-child(2)) {
+	align-content: start;
+	align-items: baseline;
+}
+[data-type=e] {
+	text-align: center;
+}
+[data-type=n],
+[data-type=n] > span {
+	text-align: right;
+}

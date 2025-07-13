@@ -117,6 +117,28 @@ export class ColorScheme {
 				return null;
 		}
 	}
+
+	/**
+	 * @param {number} index 
+	 * @returns {ColorSchemeChild?}
+	 */
+	at(index) {
+		switch (index - 1) {
+			case 0: return this.dk1;
+			case 1: return this.lt1;
+			case 2: return this.dk2;
+			case 3: return this.lt2;
+			case 4: return this.accent1;
+			case 5: return this.accent2;
+			case 6: return this.accent3;
+			case 7: return this.accent4;
+			case 8: return this.accent5;
+			case 9: return this.accent6;
+			case 10: return this.hlink;
+			case 11: return this.folHlink;
+			default: return null;
+		}
+	}
 }
 
 /**

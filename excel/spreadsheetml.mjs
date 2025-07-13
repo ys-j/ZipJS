@@ -108,7 +108,7 @@ export class WorkbookPart {
 				const doc = await this.package.fetch(path).text().then(xml);
 				switch (type) {
 					case 'styles':
-						this.stylesPart = StylesPart.from(doc, this);
+						this.stylesPart = new StylesPart(doc, this);
 						break;
 					case 'sharedStrings':
 						this.sharedStringList = Array.from(doc.querySelectorAll('si'), si => new StringItem(si));
@@ -182,16 +182,14 @@ export class StylesPart {
 	 * @param {Document} doc 
 	 * @param {WorkbookPart} wb 
 	 */
-	static from(doc, wb) {
-		const self = new StylesPart;
-		self.doc = doc;
-		self.workbook = wb;
-		return self;
+	constructor(doc, wb) {
+		this.doc = doc;
+		this.workbook = wb;
 	}
 
 	get borders() {
 		const borders = this.doc.querySelector('borders');
-		return Array.from(borders?.children || [], border => new Border(border));
+		return Array.from(borders?.children || [], border => new Border(border, this.workbook));
 	}
 
 	get cellFormats() {
@@ -427,7 +425,7 @@ export class Cell {
 		const text = v?.textContent || null;
 		switch (this.dataType) {
 			case 'n':
-				return text ? Number.parseFloat(text) : NaN;
+				return text ? Number.parseFloat(text) : null;
 			case 'b':
 				return false;
 			case 'd':
@@ -781,12 +779,15 @@ export class Alignment {
 
 export class Border {
 	/** @type {Element} */ element;
+	/** @type {WorkbookPart} */ workbook;
 	/**
 	 * 
 	 * @param {Element} [element] 
+	 * @param {WorkbookPart} [wb] 
 	 */
-	constructor(element) {
+	constructor(element, wb) {
 		this.element = element ?? document.createElementNS(ns.sml, 'border');
+		if (wb) this.workbook = wb;
 	}
 
 	/**
@@ -798,7 +799,7 @@ export class Border {
 		if (prop) {
 			const style = prop.getAttribute('style');
 			const color = prop.querySelector('color');
-			return { style, color };
+			return { style, color: color ? new Color(color, this.workbook) : undefined };
 		}
 		return null;
 	}
@@ -828,29 +829,26 @@ export class Color {
 	 * @param {Element} color 
 	 * @param {WorkbookPart} wb
 	 */
-	static from(color, wb) {
-		const self = new Color;
-		self.element = color;
-		self.workbook = wb;
+	constructor(color, wb) {
+		this.element = color;
+		this.workbook = wb;
 		const rgb = color?.getAttribute('rgb');
 		if (rgb) {
 			const [a, r, g, b] = rgb.split(/([0-9A-Fa-f]{2})/).filter(s => s.length == 2).map(n => Number.parseInt(n, 16));
-			self.rgb = [r, g, b, a];
-			return self;
+			this.rgb = [r, g, b, a];
+			return;
 		}
 		const theme = color?.getAttribute('theme');
 		if (theme) {
-			self.themeIndex = Number.parseInt(theme);
-			return self;
+			this.themeIndex = Number.parseInt(theme);
 		}
-		return self;
 	}
 	
 	toString() {
 		if (this.rgb) return `rgb(${this.rgb.join(' ')})`;
 		if (this.themeIndex) {
-			const theme = this.workbook.themes[this.themeIndex - 1];
-			return theme.themeElements?.colorScheme?.dk1?.toString() || '';
+			const theme = this.workbook.themes[0];
+			return theme.themeElements?.colorScheme?.at(this.themeIndex)?.toString() || '';
 		}
 		return '';
 	}
@@ -966,7 +964,7 @@ export class RunProperties  {
 
 	get color() {
 		const el = this.element?.querySelector('color');
-		return el ? Color.from(el, this.workbook) : null;
+		return el ? new Color(el, this.workbook) : null;
 	}
 	set color(c) {
 		const el = this.element?.querySelector('color');
